@@ -1,0 +1,10 @@
+{
+  "name": "supercoach-discord-bot",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Watches SuperCoach EPL for the weekly gameweek rollover (LIVE/FINAL tags clearing, prices/BEs updating) and posts a Discord notification.",
+  "scripts": {
+    "convert-session": "node convert_session.js",
+    "check": "node check_and_notify.js"
+  }
+}

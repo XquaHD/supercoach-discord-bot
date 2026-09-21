@@ -1,0 +1,67 @@
+name: SuperCoach Week Rollover Watcher
+
+on:
+  schedule:
+    # Every 5 minutes. GitHub's practical floor. Change to '*/10 * * * *' for every 10 min.
+    - cron: '*/5 * * * *'
+  workflow_dispatch: {}
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: npm install --no-save playwright
+
+      - name: Get installed Playwright version
+        id: pw-version
+        run: echo "version=$(npx playwright --version | awk '{print $2}')" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Playwright's Chromium binary
+        id: pw-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-chromium-${{ runner.os }}-${{ steps.pw-version.outputs.version }}
+
+      - name: Install Playwright's Chromium (only if not cached)
+        if: steps.pw-cache.outputs.cache-hit != 'true'
+        run: npx playwright install --with-deps chromium
+
+      - name: Restore session + snapshot state
+        id: cache-restore
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            auth_state.json
+            snapshot.json
+          key: supercoach-state-${{ github.run_id }}
+          restore-keys: |
+            supercoach-state-
+
+      - name: Seed auth_state.json from secret on very first run
+        run: |
+          if [ ! -f auth_state.json ]; then
+            echo "No cached session found — seeding from the SUPERCOACH_AUTH_STATE_B64 secret."
+            echo "${{ secrets.SUPERCOACH_AUTH_STATE_B64 }}" | base64 -d > auth_state.json
+          fi
+
+      - name: Run the check
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: node check_and_notify.js
+
+      - name: Save session + snapshot state for next run
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            auth_state.json
+            snapshot.json
+          key: supercoach-state-${{ github.run_id }}
