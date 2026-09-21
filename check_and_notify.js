@@ -14,7 +14,9 @@ const fs = require('fs');
 const AUTH_STATE_PATH = process.env.AUTH_STATE_PATH || 'auth_state.json';
 const SNAPSHOT_PATH = process.env.SNAPSHOT_PATH || 'snapshot.json';
 const DISCORD_WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL;
+const DISCORD_ROLE_ID = process.env.DISCORD_ROLE_ID || '1404052060009140364';
 const API_BASE = 'https://www.supercoach.com.au/2026/api/epl/classic/v1';
+const LOWEST_BE_COUNT = 20;
 
 // A realistic browser User-Agent, since some APIs behind bot-protection
 // reject requests that look like they're coming from a bare script.
@@ -73,7 +75,10 @@ async function postToDiscord(content) {
     const res = await fetch(DISCORD_WEBHOOK_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content: chunk }),
+      body: JSON.stringify({
+        content: chunk,
+        allowed_mentions: { parse: ['roles'] },
+      }),
     });
     if (!res.ok) {
       const t = await res.text();
@@ -95,25 +100,14 @@ async function main() {
   const settings = await api(token, '/settings?min=false');
   const comp = settings.competition;
 
-  const me = await api(token, '/me');
-  const userTeams = await api(token, `/users/${me.id}/userteams?embed=user`);
-  const teamId = userTeams[0].id;
-
   const round = comp.next_round;
-  const statsPlayers = await api(token, `/userteams/${teamId}/statsPlayers?round=${round}`);
   const players = await api(token, `/players?round=${round}&embed=notes,odds,player_stats,positions`);
 
   const prev = loadSnapshot();
   const rolledOver = !!prev && comp.next_round > prev.next_round;
 
-  const pickedIds = new Set(
-    (statsPlayers.players || [])
-      .filter((p) => p.picked === 'true' || p.picked === true)
-      .map((p) => p.player_id)
-  );
-
-  const squad = players
-    .filter((p) => pickedIds.has(p.id))
+  const lowestBe = players
+    .filter((p) => p.active !== false)
     .map((p) => {
       const s = (p.player_stats && p.player_stats[0]) || {};
       return {
@@ -124,14 +118,16 @@ async function main() {
         be: s.be1,
         proj_price_change: s.ppc1,
       };
-    });
+    })
+    .filter((p) => p.be != null && p.price != null)
+    .sort((a, b) => a.be - b.be)
+    .slice(0, LOWEST_BE_COUNT);
 
   saveSnapshot({
     current_round: comp.current_round,
     next_round: comp.next_round,
     is_lockout: comp.is_lockout,
     checked_at: new Date().toISOString(),
-    squad,
   });
 
   if (!prev) {
@@ -140,16 +136,17 @@ async function main() {
   }
 
   if (rolledOver) {
-    const lines = squad.map(
-      (p) =>
-        `**${p.name}** (${p.team}) — £${(p.price || 0).toLocaleString()} (${money(p.price_change)}) · BE ${
-          p.be
-        } · proj next ${money(p.proj_price_change)}`
+    const lines = lowestBe.map(
+      (p, i) =>
+        `${i + 1}. **${p.name}** (${p.team}) — BE ${p.be} · £${(p.price || 0).toLocaleString()} (${money(
+          p.price_change
+        )}) · proj next ${money(p.proj_price_change)}`
     );
 
     const content = [
-      `🔔 **SuperCoach has rolled over to Week ${comp.next_round}!**`,
-      'LIVE/FINAL tags are cleared and prices/BEs/projected price changes are updated.',
+      `<@&${DISCORD_ROLE_ID}>`,
+      `🔔 Tim Michell has finally woken up... SuperCoach has rolled over to Week ${comp.next_round}!`,
+      `Lowest ${LOWEST_BE_COUNT} breakevens for the new round:`,
       '',
       ...lines,
     ].join('\n');
